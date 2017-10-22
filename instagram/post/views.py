@@ -1,6 +1,7 @@
 """
 post_list뷰를 'post/' URL에 할당
 """
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import render, get_object_or_404, redirect
 
 from .forms import PostForm, CommentForm
@@ -71,9 +72,14 @@ def post_create(request):
         # form생성과정에서 전달된 데이터들이 Form의 모든 field들에 유효한지 검사
         if form.is_valid():
             # 유효할 경우 Post인스턴스를 생성 및 저장
-            Post.objects.create(
-                author=request.user,
-                photo=form.cleaned_data['photo'])
+
+            # 1. 커스텀 메서드 사용
+            # form.save(author=request.user)
+
+            # 2. 기존 Django의 ModelForm방식 사용
+            post = form.save(commit=False)
+            post.author = request.user
+            post.save()
             return redirect('post:post_list')
     else:
         # GET요청의 경우, 빈 PostForm인스턴스를 생성해서 템플릿에 전달
@@ -85,6 +91,18 @@ def post_create(request):
         'form': form,
     }
     return render(request, 'post/post_create.html', context)
+
+
+def post_delete(request, post_pk):
+    if request.method == 'POST':
+        # post_pk에 해당하는 Post가 있는지 검사
+        post = get_object_or_404(Post, pk=post_pk)
+        # request.user가 Post의 author인지 검사
+        if post.author == request.user:
+            post.delete()
+            return redirect('post:post_list')
+        else:
+            raise PermissionDenied('작성자가 아닙니다')
 
 
 def comment_create(request, post_pk):
@@ -109,13 +127,31 @@ def comment_create(request, post_pk):
         # 유효성 검증
         if form.is_valid():
             # 통과한 경우, post에 해당하는 Comment인스턴스를 생성
-            PostComment.objects.create(
-                post=post,
-                author=request.user,
-                content=form.cleaned_data['content']
-            )
-            # 생성 후 Post의 detail화면으로 이동
-            next = request.GET.get('next')
+            comment = form.save(commit=False)
+            comment.author = request.user
+            comment.post = post
+            comment.save()
+
+            # GET parameter로 'next'값이 전달되면 
+            # 공백을 없애고 다음에 redirect될 주소로 지정
+            next = request.GET.get('next', '').strip()
+            # 다음에 갈 URL (next)가 빈 문자열이 아닌 경우
             if next:
+                # 해당 next url로 이동
                 return redirect(next)
+            # 지정되지 않으면 post_detail로 이동
             return redirect('post:post_detail', post_pk=post_pk)
+
+
+def comment_delete(request, comment_pk):
+    next_path = request.GET.get('next', '').strip()
+
+    if request.method == 'POST':
+        comment = get_object_or_404(PostComment, pk=comment_pk)
+        if comment.author == request.user:
+            comment.delete()
+            if next_path:
+                return redirect(next_path)
+            return redirect('post:post_detail', post_pk=comment.post.pk)
+        else:
+            raise PermissionDenied('작성자가 아닙니다')
